@@ -1,0 +1,65 @@
+# Configuration for Cog ⚙️
+# Reference: https://cog.run/yaml
+
+build:
+  # set to true if your model requires a GPU
+  gpu: true
+  cuda: "11.8"
+
+  # a list of ubuntu apt packages to install
+  # system_packages:
+  #   - "libgl1-mesa-glx"
+  #   - "libglib2.0-0"
+
+  # python version in the form '3.11' or '3.11.4'
+  python_version: "3.11"
+
+  # a list of packages in the format <package-name>==<version>
+  python_packages:
+    - torch==2.0.1
+    - torchdiffeq==0.2.3
+    - torchmetrics==1.2.1
+    - torchsde==0.2.5
+    - torchvision==0.15.2
+    - accelerate==0.29.3
+    - av==11.0.0
+    - clip @ https://github.com/openai/CLIP/archive/d50d76daa670286dd6cacf3bcd80b5e4823fc8e1.zip#sha256=b5842c25da441d6c581b53a5c60e0c2127ebafe0f746f8e15561a006c6c3be6a
+    - decord==0.6.0
+    - diffusers>=0.24.0,<=0.27.2
+    - einops==0.4.1
+    - imageio==2.33.0
+    - imageio-ffmpeg==0.4.9
+    - ffmpeg-python==0.2.0
+    - omegaconf==2.2.3
+    - open-clip-torch==2.20.0
+    - opencv-contrib-python==4.8.1.78
+    - opencv-python==4.8.1.78
+    - scikit-image==0.21.0
+    - scikit-learn==1.3.2
+    - transformers==4.33.1
+    - xformers==0.0.22
+    - moviepy==1.0.3
+    - wget==3.2
+  #   - "numpy==1.19.4"
+  #   - "torch==1.8.0"
+  #   - "torchvision==0.9.0"
+
+  # commands run after the environment is setup
+  run:
+    - "apt-get update -y"
+    - "apt-get install -y software-properties-common"
+    - "add-apt-repository -y ppa:ubuntuhandbook1/ffmpeg7"
+    - "apt-get update -y"
+    - "apt-get install ffmpeg libgl1-mesa-glx -y"
+    - "pip install --no-cache-dir -U openmim"
+    - "pip install --upgrade setuptools"
+    - "pip install chumpy"
+    - "mim install mmengine"
+    - "mim install 'mmcv>=2.0.1'"
+    - "mim install 'mmdet>=3.1.0'"
+    - "mim install 'mmpose>=1.1.0'"
+  #   - "echo env is ready!"
+  #   - "echo another command if needed"
+
+# predict.py defines how predictions are run on your model
+predict: "predict.py:Predictor"
