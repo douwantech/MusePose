@@ -2,6 +2,7 @@ import os
 from cog import BasePredictor, Input, Path
 from argparse import Namespace
 import pose_align as p
+import gen as g
 import subprocess
 from moviepy.editor import VideoFileClip, AudioFileClip
 
@@ -48,18 +49,34 @@ class Predictor(BasePredictor):
 
         # Run the pose alignment process
         p.run_align_video_with_filterPose_translate_smooth(args)
+        inferanceArgs = Namespace(
+                imgfn_refer=str(imgfn_refer),
+                vidfn=args.outfn_align_pose_video,
+                config="./configs/test_stage_2.yaml",
+                W=768,
+                H=768,
+                L=300,
+                S=48,
+                O=4,
+                cfg=3.5,
+                seed=99,
+                steps=20,
+                fps=16,
+                skip=1,
+            )
 
+        g.runInference(inferanceArgs)
         # 定义命令及其参数
-        command = [
-            "python", "gen.py",
-            "--config", "./configs/test_stage_2.yaml",
-        ]
-
-        # 执行命令
-        result = subprocess.run(command, capture_output=True, text=True)
+        # command = [
+        #     "python", "gen.py",
+        #     "--config", "./configs/test_stage_2.yaml",
+        # ]
+        #
+        # # 执行命令
+        # result = subprocess.run(command, capture_output=True, text=True)
         # 输出结果
-        print("STDOUT:", result.stdout)
-        print("STDERR:", result.stderr)
+        # print("STDOUT:", result.stdout)
+        # print("STDERR:", result.stderr)
 
         # 定义命令及其参数
         mergeCommand = [

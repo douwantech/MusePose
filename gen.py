@@ -63,6 +63,157 @@ def scale_video(video,width,height):
     return scaled_video
 
 
+def runInference(args):
+    config = OmegaConf.load(args.config)
+
+    if config.weight_dtype == "fp16":
+        weight_dtype = torch.float16
+    else:
+        weight_dtype = torch.float32
+
+    vae = AutoencoderKL.from_pretrained(
+        config.pretrained_vae_path,
+    ).to("cuda", dtype=weight_dtype)
+
+    reference_unet = UNet2DConditionModel.from_pretrained(
+        config.pretrained_base_model_path,
+        subfolder="unet",
+    ).to(dtype=weight_dtype, device="cuda")
+
+    inference_config_path = config.inference_config
+    infer_config = OmegaConf.load(inference_config_path)
+    denoising_unet = UNet3DConditionModel.from_pretrained_2d(
+        config.pretrained_base_model_path,
+        config.motion_module_path,
+        subfolder="unet",
+        unet_additional_kwargs=infer_config.unet_additional_kwargs,
+    ).to(dtype=weight_dtype, device="cuda")
+
+    pose_guider = PoseGuider(320, block_out_channels=(16, 32, 96, 256)).to(
+        dtype=weight_dtype, device="cuda"
+    )
+
+    image_enc = CLIPVisionModelWithProjection.from_pretrained(
+        config.image_encoder_path
+    ).to(dtype=weight_dtype, device="cuda")
+
+    sched_kwargs = OmegaConf.to_container(infer_config.noise_scheduler_kwargs)
+    scheduler = DDIMScheduler(**sched_kwargs)
+
+    generator = torch.manual_seed(args.seed)
+
+    width, height = args.W, args.H
+
+    # load pretrained weights
+    denoising_unet.load_state_dict(
+        torch.load(config.denoising_unet_path, map_location="cpu"),
+        strict=False,
+    )
+    reference_unet.load_state_dict(
+        torch.load(config.reference_unet_path, map_location="cpu"),
+    )
+    pose_guider.load_state_dict(
+        torch.load(config.pose_guider_path, map_location="cpu"),
+    )
+
+    pipe = Pose2VideoPipeline(
+        vae=vae,
+        image_encoder=image_enc,
+        reference_unet=reference_unet,
+        denoising_unet=denoising_unet,
+        pose_guider=pose_guider,
+        scheduler=scheduler,
+    )
+    pipe = pipe.to("cuda", dtype=weight_dtype)
+    pipe = pipe.to("cuda", dtype=weight_dtype)
+
+    # date_str = datetime.now().strftime("%Y%m%d")
+    # time_str = datetime.now().strftime("%H%M")
+
+    def handle_single(ref_image_path, pose_video_path):
+        print('handle===', ref_image_path, pose_video_path)
+        ref_name = Path(ref_image_path).stem
+        pose_name = Path(pose_video_path).stem.replace("_kps", "")
+
+        ref_image_pil = Image.open(ref_image_path).convert("RGB")
+
+        pose_list = []
+        pose_tensor_list = []
+        pose_images = read_frames(pose_video_path)
+        src_fps = get_fps(pose_video_path)
+        print(f"pose video has {len(pose_images)} frames, with {src_fps} fps")
+        L = min(args.L, len(pose_images))
+        pose_transform = transforms.Compose(
+            [transforms.Resize((height, width)), transforms.ToTensor()]
+        )
+        original_width, original_height = 0, 0
+
+        pose_images = pose_images[::args.skip + 1]
+        print("processing length:", len(pose_images))
+        src_fps = src_fps // (args.skip + 1)
+        print("fps", src_fps)
+        L = L // ((args.skip + 1))
+
+        for pose_image_pil in pose_images[: L]:
+            pose_tensor_list.append(pose_transform(pose_image_pil))
+            pose_list.append(pose_image_pil)
+            original_width, original_height = pose_image_pil.size
+            pose_image_pil = pose_image_pil.resize((width, height))
+
+        # repeart the last segment
+        last_segment_frame_num = (L - args.S) % (args.S - args.O)
+        repeart_frame_num = (args.S - args.O - last_segment_frame_num) % (args.S - args.O)
+        for i in range(repeart_frame_num):
+            pose_list.append(pose_list[-1])
+            pose_tensor_list.append(pose_tensor_list[-1])
+
+        ref_image_tensor = pose_transform(ref_image_pil)  # (c, h, w)
+        ref_image_tensor = ref_image_tensor.unsqueeze(1).unsqueeze(0)  # (1, c, 1, h, w)
+        ref_image_tensor = repeat(ref_image_tensor, "b c f h w -> b c (repeat f) h w", repeat=L)
+
+        pose_tensor = torch.stack(pose_tensor_list, dim=0)  # (f, c, h, w)
+        pose_tensor = pose_tensor.transpose(0, 1)
+        pose_tensor = pose_tensor.unsqueeze(0)
+
+        video = pipe(
+            ref_image_pil,
+            pose_list,
+            width,
+            height,
+            len(pose_list),
+            args.steps,
+            args.cfg,
+            generator=generator,
+            context_frames=args.S,
+            context_stride=1,
+            context_overlap=args.O,
+        ).videos
+
+        m1 = config.pose_guider_path.split('.')[0].split('/')[-1]
+        m2 = config.motion_module_path.split('.')[0].split('/')[-1]
+
+        save_dir = Path(f"./output")
+        save_dir.mkdir(exist_ok=True, parents=True)
+
+        result = scale_video(video[:, :, :L], original_width, original_height)
+        save_videos_grid(
+            result,
+            f"{save_dir}/video_no_audio.mp4",
+            n_rows=1,
+            fps=src_fps if args.fps is None else args.fps,
+        )
+
+        video = torch.cat([ref_image_tensor, pose_tensor[:, :, :L], video[:, :, :L]], dim=0)
+        video = scale_video(video, original_width, original_height)
+        save_videos_grid(
+            video,
+            f"{save_dir}/{ref_name}_{pose_name}_{args.cfg}_{args.steps}_{args.skip}_{m1}_{m2}.mp4",
+            n_rows=3,
+            fps=src_fps if args.fps is None else args.fps,
+        )
+
+    handle_single(args.imgfn_refer, args.vidfn)
+
 def main():
     args = parse_args()
 
